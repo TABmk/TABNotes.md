@@ -13,8 +13,8 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
-    && groupadd --system tabnotes \
-    && useradd --system --gid tabnotes --home-dir /app --shell /usr/sbin/nologin tabnotes \
+    && groupadd --system --gid 10001 tabnotes \
+    && useradd --system --uid 10001 --gid tabnotes --home-dir /app --shell /usr/sbin/nologin tabnotes \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/tabnotes /usr/local/bin/tabnotes

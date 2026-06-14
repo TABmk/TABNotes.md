@@ -18,4 +18,7 @@ services:
     expose:
       - "8080"
     volumes:
-      - ./data:/app/data
+      - tabnotes_data:/app/data
+
+volumes:
+  tabnotes_data:

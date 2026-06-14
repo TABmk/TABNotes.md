@@ -77,6 +77,7 @@ Then open `http://localhost:8080/login`.
 ## Docker Compose
 
 The included `docker-compose.yml` is set up for internal Docker networking by default through `expose`.
+It uses a Docker named volume for SQLite storage so you do not hit host bind-mount permission issues with the non-root container user.
 
 Example:
 
@@ -94,6 +95,13 @@ RUST_LOG=info
 EOF
 
 docker compose up -d --build
+```
+
+If you specifically want a host bind mount like `./data:/app/data`, create the directory and make it writable by container UID `10001` first:
+
+```bash
+mkdir -p data
+sudo chown -R 10001:10001 data
 ```
 
 If you want to publish a host port, add this to the service:
@@ -125,7 +133,7 @@ docker run -d \
   -e BIND_ADDR='0.0.0.0:8080' \
   -e PASSKEY_RP_NAME='TabNotes' \
   -e HIDE_FOOTER='false' \
-  -v "$(pwd)/data:/app/data" \
+  -v tabnotes_data:/app/data \
   tabnotes
 ```
 
@@ -140,6 +148,13 @@ docker run -d \
   -e PUBLIC_BASE_URL='http://localhost:8080' \
   -v "$(pwd)/data:/app/data" \
   tabnotes
+```
+
+If you use a host bind mount with `docker run`, fix permissions first:
+
+```bash
+mkdir -p data
+sudo chown -R 10001:10001 data
 ```
 
 If you started the container with `docker run`, changing env vars later requires removing and creating the container again. `docker restart` does not replace its environment.
