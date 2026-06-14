@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="reader-layout">
+  <article class="reader-card">
+    <header class="reader-header">
+      <h1>{{ note_title }}</h1>
+      <div class="reader-meta">
+        <span>{{ updated_at }}</span>
+        {% if is_admin %}
+        <a class="ghost-link" href="{{ edit_url }}">Edit</a>
+        {% endif %}
+      </div>
+    </header>
+    <div class="markdown-body reader-body">{{ note_html|safe }}</div>
+  </article>
+</main>
+{% endblock %}

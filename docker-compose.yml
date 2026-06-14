@@ -1,0 +1,21 @@
+services:
+  tabnotes:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tabnotes
+    restart: unless-stopped
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?set ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD}
+      BIND_ADDR: ${BIND_ADDR:-0.0.0.0:8080}
+      DATABASE_URL: ${DATABASE_URL:-sqlite://data/tabnotes.db}
+      ROOT_REDIRECT_URL: ${ROOT_REDIRECT_URL:-/dashboard}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      PASSKEY_RP_NAME: ${PASSKEY_RP_NAME:-TabNotes}
+      HIDE_FOOTER: ${HIDE_FOOTER:-false}
+      RUST_LOG: ${RUST_LOG:-info}
+    expose:
+      - "8080"
+    volumes:
+      - ./data:/app/data

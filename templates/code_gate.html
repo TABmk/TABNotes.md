@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="reader-layout">
+  <article class="reader-card narrow-card">
+    {% if !error_message.is_empty() %}
+    <div class="notice error">{{ error_message }}</div>
+    {% endif %}
+    <form class="stack-md" action="{{ form_action }}" method="post">
+      <label class="stack-xs">
+        <span>Access code</span>
+        <input type="password" name="access_code" autocomplete="one-time-code" required>
+      </label>
+      <button class="primary-button" type="submit">Open</button>
+    </form>
+  </article>
+</main>
+{% endblock %}

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="auth-layout" data-next="{{ next_url }}">
+  <section class="card auth-card">
+    {% if !error_message.is_empty() %}
+    <div class="notice error">{{ error_message }}</div>
+    {% endif %}
+    <form class="stack-md" action="/login" method="post">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <label class="stack-xs">
+        <span>Username</span>
+        <input type="text" name="username" autocomplete="username" required>
+      </label>
+      <label class="stack-xs">
+        <span>Password</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </label>
+      <button class="primary-button" type="submit">Sign in</button>
+    </form>
+    {% if passkeys_available %}
+    <div class="divider"><span>or</span></div>
+    <button class="secondary-button full-width-button" id="passkey-login" type="button">
+      Passkey
+    </button>
+    <p class="tiny muted" id="passkey-login-status"></p>
+    {% endif %}
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+{% if passkeys_available %}
+<script src="/static/passkey.js"></script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,9 @@
+data
+debug
+target
+**/*.rs.bk
+.env
+.env.*
+
+.DS_Store
+**/*.DS_Store

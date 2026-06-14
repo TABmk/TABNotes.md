@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }} · TABNotes.md</title>
+    <meta name="theme-color" content="#0a0a0f">
+    {% if noindex %}
+    <meta name="robots" content="noindex, nofollow, noarchive">
+    {% endif %}
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body class="{{ body_class }}">
+    <div class="bg-mesh" aria-hidden="true"></div>
+    <div class="site-shell">
+      {% if is_admin %}
+      <header class="topbar">
+        <a class="brand" href="/dashboard">TABNotes.md</a>
+        <div class="topbar-actions">
+          <a class="ghost-link" href="/admin/notes/new">New note</a>
+          <form action="/logout" method="post">
+            <button class="ghost-button" type="submit">Log out</button>
+          </form>
+        </div>
+      </header>
+      {% endif %}
+      {% block content %}{% endblock %}
+      {% if show_footer %}
+      <footer class="site-footer">
+        <span>
+          Made with
+          <span class="footer-emoji" data-emoji-rotator aria-label="rotating emoji">❤️</span>
+          by
+        </span>
+        <a
+          class="footer-link"
+          href="https://tab.mk"
+          target="_blank"
+          rel="noreferrer noopener"
+        >
+          TAB_mk
+        </a>
+      </footer>
+      {% endif %}
+    </div>
+    {% if show_footer %}
+    <script src="/static/footer.js"></script>
+    {% endif %}
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="dashboard-layout">
+  {% if !flash_message.is_empty() %}
+  <div class="notice">{{ flash_message }}</div>
+  {% endif %}
+
+  <section class="grid-two">
+    <article class="card">
+      <div class="section-head">
+        <h2>Notes</h2>
+      </div>
+      {% if notes.is_empty() %}
+      <p class="muted">No notes.</p>
+      {% else %}
+      <div class="note-list">
+        {% for note in notes %}
+        <div class="note-row">
+          <a class="note-row-link" href="/admin/notes/{{ note.id }}/edit" aria-label="Edit {{ note.title }}"></a>
+          <div class="note-row-main">
+            <div class="note-title">{{ note.title }}</div>
+            <div class="note-meta">
+              <span>{{ note.visibility_label }}</span>
+              <span>{{ note.updated_at }}</span>
+            </div>
+          </div>
+          <a class="ghost-link note-open-link full-width-open" href="/notes/{{ note.slug }}" target="_blank" rel="noreferrer">Open</a>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </article>
+
+    <article class="card">
+      <div class="section-head">
+        <h2>Passkeys</h2>
+      </div>
+      {% if passkey_supported %}
+      <form class="stack-sm" id="passkey-register-form">
+        <label class="stack-xs">
+          <span>Label</span>
+          <input type="text" name="label" placeholder="MacBook Touch ID" required>
+        </label>
+        <button class="secondary-button" type="submit">Add</button>
+        <p class="tiny muted" id="passkey-register-status"></p>
+      </form>
+      {% endif %}
+      {% if passkeys.is_empty() %}
+      <div class="empty-block tiny muted">No passkeys.</div>
+      {% else %}
+      <div class="passkey-list">
+        {% for passkey in passkeys %}
+        <div class="passkey-row">
+          <strong>{{ passkey.label }}</strong>
+          <span class="tiny muted">{{ passkey.created_at }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </article>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/passkey.js"></script>
+{% endblock %}

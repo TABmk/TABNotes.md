@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block content %}
+<main class="editor-layout">
+  <section class="page-actions">
+    {% if !share_url.is_empty() %}
+    <a class="ghost-link full-width-button" href="{{ share_url }}" target="_blank" rel="noreferrer">Open</a>
+    {% endif %}
+  </section>
+
+  {% if !error_message.is_empty() %}
+  <div class="notice error">{{ error_message }}</div>
+  {% endif %}
+
+  <form class="editor-form" action="{{ form_action }}" method="post">
+    <section class="card stack-md">
+      <div class="grid-fields">
+        <label class="stack-xs">
+          <span>Title</span>
+          <input id="title-input" type="text" name="title" value="{{ title_value }}" required>
+        </label>
+        <label class="stack-xs">
+          <span>Slug</span>
+          <input id="slug-input" type="text" name="slug" value="{{ slug_value }}" required>
+        </label>
+      </div>
+
+      <div class="grid-fields">
+        <label class="stack-xs">
+          <span>Visibility</span>
+          <select name="visibility" id="visibility-input">
+            <option value="admin" {% if visibility_value == "admin" %}selected{% endif %}>Admin</option>
+            <option value="public" {% if visibility_value == "public" %}selected{% endif %}>Public</option>
+            <option value="code" {% if visibility_value == "code" %}selected{% endif %}>Code protected</option>
+          </select>
+        </label>
+        <label class="stack-xs">
+          <span>Access code</span>
+          <input type="text" name="access_code" value="{{ access_code_placeholder }}" placeholder="Optional unless code mode">
+        </label>
+      </div>
+    </section>
+
+    <section class="card editor-card" data-preview-endpoint="/admin/preview" data-editor-mode="{{ editor_mode }}">
+      <div class="editor-toolbar">
+        <div class="toolbar-tabs">
+          <button class="tab-button is-active" data-mode="write" type="button">Write</button>
+          <button class="tab-button" data-mode="preview" type="button">Preview</button>
+          <button class="tab-button" data-mode="split" type="button">Split</button>
+        </div>
+        <button class="primary-button" type="submit">{{ submit_label }}</button>
+      </div>
+      <div class="format-toolbar" aria-label="Formatting">
+        <button class="tool-button" data-tool="h1" type="button">H1</button>
+        <button class="tool-button" data-tool="h2" type="button">H2</button>
+        <button class="tool-button" data-tool="bold" type="button">B</button>
+        <button class="tool-button" data-tool="italic" type="button">I</button>
+        <button class="tool-button" data-tool="quote" type="button">"</button>
+        <button class="tool-button" data-tool="ul" type="button">•</button>
+        <button class="tool-button" data-tool="ol" type="button">1.</button>
+        <button class="tool-button" data-tool="task" type="button">[]</button>
+        <button class="tool-button" data-tool="code" type="button">&lt;/&gt;</button>
+        <button class="tool-button" data-tool="link" type="button">Link</button>
+        <button class="tool-button" data-tool="hr" type="button">---</button>
+      </div>
+      <div class="editor-grid">
+        <label class="editor-pane editor-input-pane">
+          <span class="sr-only">Markdown</span>
+          <textarea
+            id="markdown-input"
+            name="markdown"
+            class="markdown-input"
+            spellcheck="false"
+            placeholder="# Note"
+          >{{ markdown_value }}</textarea>
+        </label>
+        <article id="markdown-preview" class="editor-pane markdown-body">{{ preview_html|safe }}</article>
+      </div>
+    </section>
+  </form>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/editor.js"></script>
+{% endblock %}
