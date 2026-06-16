@@ -9,6 +9,9 @@
         <span>{{ updated_at }}</span>
         {% if is_admin %}
         <a class="ghost-link" href="{{ edit_url }}">Edit</a>
+        <form action="{{ delete_url }}" method="post" onsubmit="return confirm('Delete this note?');">
+          <button class="ghost-button danger-button" type="submit">Delete note</button>
+        </form>
         {% endif %}
       </div>
     </header>

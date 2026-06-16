@@ -24,3 +24,6 @@ url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
 webauthn-rs = "0.5"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

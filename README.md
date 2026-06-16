@@ -16,7 +16,8 @@ It has a single admin account from environment variables, SQLite storage, render
 
 - no self-registration flow
 - admin can register passkeys after signing in
-- minimal dashboard with note list and editing
+- minimal dashboard with note list, editing, and deletion
+- API key management in the dashboard for scripted note access
 - `/` redirects to `ROOT_REDIRECT_URL`
 - notes use Markdown with live rendered preview while editing
 - shared links open as rendered Markdown pages
@@ -166,7 +167,8 @@ If you started the container with `docker run`, changing env vars later requires
 3. Start it with `docker compose up -d --build` or `cargo run`.
 4. Open `/login` and sign in with the configured admin credentials.
 5. Add a passkey from the dashboard if you want passwordless admin login.
-6. Create notes and choose `admin`, `public`, or `code` visibility.
+6. Create API keys from the dashboard if you want to manage notes over HTTP.
+7. Create notes and choose `admin`, `public`, or `code` visibility.
 
 ## Routes
 
@@ -175,4 +177,36 @@ If you started the container with `docker run`, changing env vars later requires
 - `/dashboard` admin dashboard
 - `/admin/notes/new` create note
 - `/admin/notes/:id/edit` edit note
+- `/admin/notes/:id/delete` delete note
+- `/admin/api-keys` create API key
+- `/admin/api-keys/:id/delete` delete API key
+- `/api/notes` list or create notes with an API key
+- `/api/notes/:id` read, update, or delete a note with an API key
 - `/notes/:slug` rendered shared note page
+
+## API usage
+
+Create an API key from the dashboard. The raw key is shown only once, so store it immediately.
+
+Send the key in either of these headers:
+
+- `X-API-Key: tn_...`
+- `Authorization: Bearer tn_...`
+
+Example:
+
+```bash
+API_KEY='tn_your_key_here'
+
+curl -H "X-API-Key: $API_KEY" http://localhost:8080/api/notes
+
+curl -X POST http://localhost:8080/api/notes \
+  -H "Authorization: Bearer $API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "title": "API note",
+    "slug": "api-note",
+    "content": "Created over HTTP",
+    "visibility": "public"
+  }'
+```

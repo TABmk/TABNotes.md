@@ -5,6 +5,13 @@
   {% if !flash_message.is_empty() %}
   <div class="notice">{{ flash_message }}</div>
   {% endif %}
+  {% if !api_key_secret.is_empty() %}
+  <div class="notice api-key-notice stack-xs">
+    <strong>New API key</strong>
+    <code class="api-key-secret">{{ api_key_secret }}</code>
+    <p class="tiny muted">Copy it now. For security, this secret is only shown once.</p>
+  </div>
+  {% endif %}
 
   <section class="grid-two">
     <article class="card">
@@ -25,40 +32,84 @@
               <span>{{ note.updated_at }}</span>
             </div>
           </div>
-          <a class="ghost-link note-open-link full-width-open" href="/notes/{{ note.slug }}" target="_blank" rel="noreferrer">Open</a>
+          <div class="note-row-actions">
+            <a class="ghost-link note-open-link" href="/notes/{{ note.slug }}" target="_blank" rel="noreferrer">Open</a>
+            <form action="/admin/notes/{{ note.id }}/delete" method="post" onsubmit="return confirm('Delete this note?');">
+              <button class="ghost-button danger-button" type="submit">Delete</button>
+            </form>
+          </div>
         </div>
         {% endfor %}
       </div>
       {% endif %}
     </article>
 
-    <article class="card">
-      <div class="section-head">
-        <h2>Passkeys</h2>
-      </div>
-      {% if passkey_supported %}
-      <form class="stack-sm" id="passkey-register-form">
-        <label class="stack-xs">
-          <span>Label</span>
-          <input type="text" name="label" placeholder="MacBook Touch ID" required>
-        </label>
-        <button class="secondary-button" type="submit">Add</button>
-        <p class="tiny muted" id="passkey-register-status"></p>
-      </form>
-      {% endif %}
-      {% if passkeys.is_empty() %}
-      <div class="empty-block tiny muted">No passkeys.</div>
-      {% else %}
-      <div class="passkey-list">
-        {% for passkey in passkeys %}
-        <div class="passkey-row">
-          <strong>{{ passkey.label }}</strong>
-          <span class="tiny muted">{{ passkey.created_at }}</span>
+    <div class="stack-md">
+      <article class="card">
+        <div class="section-head">
+          <h2>Passkeys</h2>
         </div>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </article>
+        {% if passkey_supported %}
+        <form class="stack-sm" id="passkey-register-form">
+          <label class="stack-xs">
+            <span>Label</span>
+            <input type="text" name="label" placeholder="MacBook Touch ID" required>
+          </label>
+          <button class="secondary-button" type="submit">Add</button>
+          <p class="tiny muted" id="passkey-register-status"></p>
+        </form>
+        {% endif %}
+        {% if passkeys.is_empty() %}
+        <div class="empty-block tiny muted">No passkeys.</div>
+        {% else %}
+        <div class="passkey-list">
+          {% for passkey in passkeys %}
+          <div class="passkey-row">
+            <div class="stack-xs api-key-row-main">
+              <strong>{{ passkey.label }}</strong>
+              <span class="tiny muted">{{ passkey.created_at }}</span>
+            </div>
+            <form action="/admin/passkeys/{{ passkey.id }}/delete" method="post" onsubmit="return confirm('Delete this passkey?');">
+              <button class="ghost-button danger-button" type="submit">Delete</button>
+            </form>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+
+      <article class="card">
+        <div class="section-head">
+          <h2>API keys</h2>
+        </div>
+        <form class="stack-sm" id="api-key-create-form" action="/admin/api-keys" method="post">
+          <label class="stack-xs">
+            <span>Label</span>
+            <input type="text" name="label" placeholder="Deploy script" maxlength="80" required>
+          </label>
+          <button class="secondary-button" type="submit">Create API key</button>
+        </form>
+        {% if api_keys.is_empty() %}
+        <div class="empty-block tiny muted">No API keys.</div>
+        {% else %}
+        <div class="passkey-list api-key-list">
+          {% for api_key in api_keys %}
+          <div class="passkey-row api-key-row">
+            <div class="stack-xs api-key-row-main">
+              <strong>{{ api_key.label }}</strong>
+              <span class="tiny muted">Prefix: {{ api_key.key_prefix }}</span>
+              <span class="tiny muted">Created: {{ api_key.created_at }}</span>
+              <span class="tiny muted">Last used: {{ api_key.last_used_at }}</span>
+            </div>
+            <form action="/admin/api-keys/{{ api_key.id }}/delete" method="post" onsubmit="return confirm('Revoke this API key?');">
+              <button class="ghost-button danger-button" type="submit">Revoke</button>
+            </form>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </article>
+    </div>
   </section>
 </main>
 {% endblock %}

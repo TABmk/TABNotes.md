@@ -37,8 +37,11 @@ use webauthn_rs::prelude::*;
 
 const ADMIN_SESSION_KEY: &str = "is_admin";
 const NOTE_GRANTS_KEY: &str = "granted_note_ids";
+const FLASH_MESSAGE_KEY: &str = "flash_message";
+const API_KEY_SECRET_KEY: &str = "api_key_created_secret";
 const WEBAUTHN_STATE_TTL: Duration = Duration::from_secs(300);
 const MAX_PENDING_WEBAUTHN_STATES: usize = 256;
+const API_KEY_PREFIX_LEN: usize = 12;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -74,33 +77,7 @@ async fn main() -> anyhow::Result<()> {
         pending_authentications: Mutex::new(HashMap::new()),
     });
 
-    let session_store = MemoryStore::default();
-    let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(state.config.public_base_url.scheme() == "https")
-        .with_same_site(tower_sessions::cookie::SameSite::Lax);
-
-    let app = Router::new()
-        .route("/", get(root_redirect))
-        .route("/login", get(login_page).post(login_submit))
-        .route("/logout", post(logout))
-        .route("/dashboard", get(dashboard))
-        .route("/admin/notes/new", get(new_note_page).post(create_note))
-        .route(
-            "/admin/notes/{id}/edit",
-            get(edit_note_page).post(update_note),
-        )
-        .route("/admin/preview", post(markdown_preview))
-        .route("/admin/passkeys/start", post(start_passkey_registration))
-        .route("/admin/passkeys/finish", post(finish_passkey_registration))
-        .route("/auth/passkey/start", post(start_passkey_authentication))
-        .route("/auth/passkey/finish", post(finish_passkey_authentication))
-        .route("/notes/{slug}", get(view_note))
-        .route("/notes/{slug}/code", post(unlock_code_note))
-        .fallback(get(not_found_route))
-        .nest_service("/static", ServeDir::new("static"))
-        .layer(session_layer)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state);
+    let app = app_router(state);
 
     info!("listening on {}", bind_addr);
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
@@ -238,6 +215,16 @@ struct PasskeyRecord {
     created_at: String,
 }
 
+#[derive(FromRow, Clone)]
+struct ApiKeyRecord {
+    id: i64,
+    label: String,
+    key_prefix: String,
+    key_hash: String,
+    created_at: String,
+    last_used_at: Option<String>,
+}
+
 #[derive(Clone)]
 struct DashboardNote {
     id: i64,
@@ -249,8 +236,18 @@ struct DashboardNote {
 
 #[derive(Clone)]
 struct DashboardPasskey {
+    id: i64,
     label: String,
     created_at: String,
+}
+
+#[derive(Clone)]
+struct DashboardApiKey {
+    id: i64,
+    label: String,
+    key_prefix: String,
+    created_at: String,
+    last_used_at: String,
 }
 
 #[derive(Template)]
@@ -276,8 +273,10 @@ struct DashboardTemplate {
     show_footer: bool,
     notes: Vec<DashboardNote>,
     passkeys: Vec<DashboardPasskey>,
+    api_keys: Vec<DashboardApiKey>,
     passkey_supported: bool,
     flash_message: String,
+    api_key_secret: String,
 }
 
 #[derive(Template)]
@@ -298,6 +297,7 @@ struct EditorTemplate {
     access_code_placeholder: String,
     preview_html: String,
     share_url: String,
+    delete_url: String,
     editor_mode: String,
 }
 
@@ -313,6 +313,7 @@ struct NoteTemplate {
     note_html: String,
     updated_at: String,
     edit_url: String,
+    delete_url: String,
 }
 
 #[derive(Template)]
@@ -356,6 +357,11 @@ struct NoteFormData {
     markdown: String,
     visibility: String,
     access_code: String,
+}
+
+#[derive(Deserialize)]
+struct ApiKeyFormData {
+    label: String,
 }
 
 #[derive(Deserialize)]
@@ -405,6 +411,84 @@ struct ApiOk {
     ok: bool,
 }
 
+#[derive(Deserialize)]
+struct ApiNotePayload {
+    title: String,
+    slug: Option<String>,
+    markdown: String,
+    visibility: String,
+    access_code: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ApiNoteResponse {
+    id: i64,
+    title: String,
+    slug: String,
+    visibility: String,
+    markdown: String,
+    created_at: String,
+    updated_at: String,
+    share_url: String,
+}
+
+#[derive(Serialize)]
+struct ApiErrorBody {
+    error: String,
+}
+
+struct ApiError {
+    status: StatusCode,
+    message: String,
+}
+
+impl ApiError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+
+    fn unauthorized(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, message)
+    }
+
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, message)
+    }
+
+    fn not_found(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, message)
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(value: anyhow::Error) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, value.to_string())
+    }
+}
+
+impl From<sqlx::Error> for ApiError {
+    fn from(value: sqlx::Error) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, value.to_string())
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(ApiErrorBody {
+                error: self.message,
+            }),
+        )
+            .into_response()
+    }
+}
+
+type ApiResult<T> = Result<T, ApiError>;
+
 async fn init_db(pool: &SqlitePool) -> anyhow::Result<()> {
     sqlx::query(
         r#"
@@ -436,6 +520,21 @@ async fn init_db(pool: &SqlitePool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT NOT NULL,
+            key_prefix TEXT NOT NULL UNIQUE,
+            key_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TEXT
+        )
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
@@ -450,6 +549,47 @@ fn build_webauthn(config: &Config) -> anyhow::Result<Arc<Webauthn>> {
         .build()?;
 
     Ok(Arc::new(webauthn))
+}
+
+fn app_router(state: Arc<AppState>) -> Router {
+    let session_store = MemoryStore::default();
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(state.config.public_base_url.scheme() == "https")
+        .with_same_site(tower_sessions::cookie::SameSite::Lax);
+
+    Router::new()
+        .route("/", get(root_redirect))
+        .route("/login", get(login_page).post(login_submit))
+        .route("/logout", post(logout))
+        .route("/dashboard", get(dashboard))
+        .route("/admin/notes/new", get(new_note_page).post(create_note))
+        .route(
+            "/admin/notes/{id}/edit",
+            get(edit_note_page).post(update_note),
+        )
+        .route("/admin/notes/{id}/delete", post(delete_note))
+        .route("/admin/preview", post(markdown_preview))
+        .route("/admin/passkeys/start", post(start_passkey_registration))
+        .route("/admin/passkeys/finish", post(finish_passkey_registration))
+        .route("/admin/passkeys/{id}/delete", post(delete_passkey))
+        .route("/admin/api-keys", post(create_api_key))
+        .route("/admin/api-keys/{id}/delete", post(delete_api_key))
+        .route("/auth/passkey/start", post(start_passkey_authentication))
+        .route("/auth/passkey/finish", post(finish_passkey_authentication))
+        .route("/notes/{slug}", get(view_note))
+        .route("/notes/{slug}/code", post(unlock_code_note))
+        .route("/api/notes", get(api_list_notes).post(api_create_note))
+        .route(
+            "/api/notes/{id}",
+            get(api_get_note)
+                .put(api_update_note)
+                .delete(api_delete_note),
+        )
+        .fallback(get(not_found_route))
+        .nest_service("/static", ServeDir::new("static"))
+        .layer(session_layer)
+        .layer(TraceLayer::new_for_http())
+        .with_state(state)
 }
 
 async fn root_redirect(State(state): State<Arc<AppState>>) -> Redirect {
@@ -540,7 +680,10 @@ async fn dashboard(State(state): State<Arc<AppState>>, session: Session) -> AppR
         id: note.id,
         title: note.title.clone(),
         slug: note.slug.clone(),
-        visibility_label: note.visibility_enum().map(|v| v.label().to_string()).unwrap_or_else(|_| "Unknown".into()),
+        visibility_label: note
+            .visibility_enum()
+            .map(|v| v.label().to_string())
+            .unwrap_or_else(|_| "Unknown".into()),
         updated_at: note.updated_at,
     })
     .collect();
@@ -552,14 +695,41 @@ async fn dashboard(State(state): State<Arc<AppState>>, session: Session) -> AppR
     .await?
     .into_iter()
     .map(|row| {
-        let _ = row.id;
         let _ = row.credential_json;
         DashboardPasskey {
+            id: row.id,
             label: row.label,
             created_at: row.created_at,
         }
     })
     .collect();
+
+    let api_keys = sqlx::query_as::<_, ApiKeyRecord>(
+        "SELECT id, label, key_prefix, key_hash, created_at, last_used_at FROM api_keys ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        let _ = row.key_hash;
+        DashboardApiKey {
+            id: row.id,
+            label: row.label,
+            key_prefix: row.key_prefix,
+            created_at: row.created_at,
+            last_used_at: row.last_used_at.unwrap_or_else(|| "Never".into()),
+        }
+    })
+    .collect();
+
+    let flash_message = session
+        .remove::<String>(FLASH_MESSAGE_KEY)
+        .await?
+        .unwrap_or_default();
+    let api_key_secret = session
+        .remove::<String>(API_KEY_SECRET_KEY)
+        .await?
+        .unwrap_or_default();
 
     let template = DashboardTemplate {
         page_title: "Dashboard".into(),
@@ -569,8 +739,10 @@ async fn dashboard(State(state): State<Arc<AppState>>, session: Session) -> AppR
         show_footer: !state.config.hide_footer,
         notes,
         passkeys,
+        api_keys,
         passkey_supported: true,
-        flash_message: String::new(),
+        flash_message,
+        api_key_secret,
     };
 
     render_page(&template, true)
@@ -689,6 +861,85 @@ async fn update_note(
             render_page(&template, true)
         }
     }
+}
+
+async fn delete_note(
+    State(state): State<Arc<AppState>>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    require_admin(&session, "/dashboard").await?;
+    let note = load_note_by_id(&state.pool, id).await?;
+
+    sqlx::query("DELETE FROM notes WHERE id = ?1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    set_flash_message(&session, format!("Deleted note: {}", note.title)).await?;
+    Ok(Redirect::to("/dashboard").into_response())
+}
+
+async fn create_api_key(
+    State(state): State<Arc<AppState>>,
+    session: Session,
+    Form(form): Form<ApiKeyFormData>,
+) -> AppResult<Response> {
+    require_admin(&session, "/dashboard").await?;
+
+    let label = form.label.trim();
+    if label.is_empty() {
+        set_flash_message(&session, "API key label is required.".to_string()).await?;
+        return Ok(Redirect::to("/dashboard").into_response());
+    }
+
+    let (key_prefix, raw_key) = generate_api_key_value();
+    let key_hash = hash_secret(&raw_key)?;
+
+    sqlx::query("INSERT INTO api_keys (label, key_prefix, key_hash) VALUES (?1, ?2, ?3)")
+        .bind(label)
+        .bind(&key_prefix)
+        .bind(key_hash)
+        .execute(&state.pool)
+        .await?;
+
+    set_flash_message(&session, format!("Created API key: {label}")).await?;
+    session.insert(API_KEY_SECRET_KEY, raw_key).await?;
+    Ok(Redirect::to("/dashboard").into_response())
+}
+
+async fn delete_passkey(
+    State(state): State<Arc<AppState>>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    require_admin(&session, "/dashboard").await?;
+
+    let passkey = load_passkey_by_id(&state.pool, id).await?;
+    sqlx::query("DELETE FROM passkeys WHERE id = ?1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    set_flash_message(&session, format!("Deleted passkey: {}", passkey.label)).await?;
+    Ok(Redirect::to("/dashboard").into_response())
+}
+
+async fn delete_api_key(
+    State(state): State<Arc<AppState>>,
+    session: Session,
+    Path(id): Path<i64>,
+) -> AppResult<Response> {
+    require_admin(&session, "/dashboard").await?;
+
+    let api_key = load_api_key_by_id(&state.pool, id).await?;
+    sqlx::query("DELETE FROM api_keys WHERE id = ?1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    set_flash_message(&session, format!("Revoked API key: {}", api_key.label)).await?;
+    Ok(Redirect::to("/dashboard").into_response())
 }
 
 async fn markdown_preview(
@@ -828,9 +1079,10 @@ async fn view_note(
     Path(slug): Path<String>,
 ) -> AppResult<Response> {
     let note = load_note_by_slug(&state.pool, &slug).await?;
+    let admin = is_admin(&session).await?;
     match note.visibility_enum()? {
         NoteVisibility::Admin => {
-            if !is_admin(&session).await? {
+            if !admin {
                 return Ok(
                     Redirect::to(&login_redirect_for(&format!("/notes/{}", note.slug)))
                         .into_response(),
@@ -843,7 +1095,7 @@ async fn view_note(
                 .get::<HashSet<i64>>(NOTE_GRANTS_KEY)
                 .await?
                 .unwrap_or_default();
-            if !grants.contains(&note.id) && !is_admin(&session).await? {
+            if !grants.contains(&note.id) && !admin {
                 let template = CodeGateTemplate {
                     page_title: format!("Unlock {}", note.title),
                     body_class: "reader-page".into(),
@@ -861,13 +1113,14 @@ async fn view_note(
     let template = NoteTemplate {
         page_title: note.title.clone(),
         body_class: "reader-page".into(),
-        is_admin: is_admin(&session).await?,
+        is_admin: admin,
         noindex: true,
         show_footer: !state.config.hide_footer,
         note_title: note.title.clone(),
         note_html: render_markdown(&note.markdown),
         updated_at: note.updated_at.clone(),
         edit_url: format!("/admin/notes/{}/edit", note.id),
+        delete_url: format!("/admin/notes/{}/delete", note.id),
     };
 
     render_page(&template, true)
@@ -961,6 +1214,9 @@ fn build_editor_template(
         access_code_placeholder: form.access_code,
         preview_html: render_markdown(&form.markdown),
         share_url,
+        delete_url: note
+            .map(|existing| format!("/admin/notes/{}/delete", existing.id))
+            .unwrap_or_default(),
         editor_mode: "split".into(),
     }
 }
@@ -1002,6 +1258,16 @@ async fn load_passkeys(pool: &SqlitePool) -> AppResult<Vec<Passkey>> {
         .collect()
 }
 
+async fn load_passkey_by_id(pool: &SqlitePool, id: i64) -> AppResult<PasskeyRecord> {
+    sqlx::query_as::<_, PasskeyRecord>(
+        "SELECT id, label, credential_json, created_at FROM passkeys WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(AppError::not_found)
+}
+
 async fn update_stored_passkey(
     pool: &SqlitePool,
     auth_result: &AuthenticationResult,
@@ -1029,6 +1295,251 @@ async fn update_stored_passkey(
     }
 
     Err(anyhow!("authenticated passkey was not found in storage").into())
+}
+
+async fn load_api_key_by_id(pool: &SqlitePool, id: i64) -> AppResult<ApiKeyRecord> {
+    sqlx::query_as::<_, ApiKeyRecord>(
+        "SELECT id, label, key_prefix, key_hash, created_at, last_used_at FROM api_keys WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(AppError::not_found)
+}
+
+async fn load_note_by_id_api(pool: &SqlitePool, id: i64) -> ApiResult<NoteRecord> {
+    sqlx::query_as::<_, NoteRecord>(
+        "SELECT id, title, slug, visibility, markdown, code_hash, created_at, updated_at FROM notes WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::not_found("Note not found."))
+}
+
+async fn authenticate_api_key(state: &AppState, headers: &HeaderMap) -> ApiResult<ApiKeyRecord> {
+    let raw_key =
+        extract_api_key(headers).ok_or_else(|| ApiError::unauthorized("Missing API key."))?;
+    let key_prefix =
+        parse_api_key_prefix(raw_key).ok_or_else(|| ApiError::unauthorized("Invalid API key."))?;
+
+    let api_key = sqlx::query_as::<_, ApiKeyRecord>(
+        "SELECT id, label, key_prefix, key_hash, created_at, last_used_at FROM api_keys WHERE key_prefix = ?1",
+    )
+    .bind(key_prefix)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| ApiError::unauthorized("Invalid API key."))?;
+
+    let password_hash = PasswordHash::new(&api_key.key_hash)
+        .map_err(|_| ApiError::unauthorized("Invalid API key."))?;
+    if Argon2::default()
+        .verify_password(raw_key.as_bytes(), &password_hash)
+        .is_err()
+    {
+        return Err(ApiError::unauthorized("Invalid API key."));
+    }
+
+    sqlx::query("UPDATE api_keys SET last_used_at = CURRENT_TIMESTAMP WHERE id = ?1")
+        .bind(api_key.id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(api_key)
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .or_else(|| {
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+}
+
+fn parse_api_key_prefix(raw_key: &str) -> Option<&str> {
+    let rest = raw_key.strip_prefix("tn_")?;
+    let (prefix, secret) = rest.split_once('_')?;
+    if prefix.len() == API_KEY_PREFIX_LEN && !secret.trim().is_empty() {
+        Some(prefix)
+    } else {
+        None
+    }
+}
+
+fn generate_api_key_value() -> (String, String) {
+    let prefix_seed = Uuid::new_v4().simple().to_string();
+    let key_prefix = prefix_seed[..API_KEY_PREFIX_LEN].to_string();
+    let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let raw_key = format!("tn_{}_{}", key_prefix, secret);
+    (key_prefix, raw_key)
+}
+
+async fn set_flash_message(session: &Session, message: String) -> AppResult<()> {
+    session.insert(FLASH_MESSAGE_KEY, message).await?;
+    Ok(())
+}
+
+fn map_api_sqlite_error(error: sqlx::Error) -> ApiError {
+    match &error {
+        sqlx::Error::Database(db_error)
+            if db_error
+                .message()
+                .contains("UNIQUE constraint failed: notes.slug") =>
+        {
+            ApiError::new(StatusCode::CONFLICT, "That slug is already in use.")
+        }
+        _ => ApiError::from(error),
+    }
+}
+
+fn api_note_payload_to_form(payload: ApiNotePayload) -> NoteFormData {
+    NoteFormData {
+        title: payload.title,
+        slug: payload.slug.unwrap_or_default(),
+        markdown: payload.markdown,
+        visibility: payload.visibility,
+        access_code: payload.access_code.unwrap_or_default(),
+    }
+}
+
+fn share_url_for_slug(state: &AppState, slug: &str) -> String {
+    state
+        .config
+        .public_base_url
+        .join(&format!("notes/{slug}"))
+        .map(|url| url.to_string())
+        .unwrap_or_default()
+}
+
+fn note_to_api_response(state: &AppState, note: NoteRecord) -> ApiNoteResponse {
+    ApiNoteResponse {
+        id: note.id,
+        title: note.title,
+        slug: note.slug.clone(),
+        visibility: note.visibility,
+        markdown: note.markdown,
+        created_at: note.created_at,
+        updated_at: note.updated_at,
+        share_url: share_url_for_slug(state, &note.slug),
+    }
+}
+
+async fn api_list_notes(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Vec<ApiNoteResponse>>> {
+    let _api_key = authenticate_api_key(&state, &headers).await?;
+    let notes = sqlx::query_as::<_, NoteRecord>(
+        "SELECT id, title, slug, visibility, markdown, code_hash, created_at, updated_at FROM notes ORDER BY updated_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .map(|note| note_to_api_response(&state, note))
+    .collect();
+
+    Ok(Json(notes))
+}
+
+async fn api_get_note(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<ApiNoteResponse>> {
+    let _api_key = authenticate_api_key(&state, &headers).await?;
+    let note = load_note_by_id_api(&state.pool, id).await?;
+    Ok(Json(note_to_api_response(&state, note)))
+}
+
+async fn api_create_note(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ApiNotePayload>,
+) -> ApiResult<(StatusCode, Json<ApiNoteResponse>)> {
+    let _api_key = authenticate_api_key(&state, &headers).await?;
+    let form = api_note_payload_to_form(payload);
+    let validated = validate_note_form(None, &form)
+        .await
+        .map_err(ApiError::bad_request)?;
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO notes (title, slug, visibility, markdown, code_hash, updated_at)
+        VALUES (?1, ?2, ?3, ?4, ?5, CURRENT_TIMESTAMP)
+        "#,
+    )
+    .bind(validated.title)
+    .bind(validated.slug)
+    .bind(validated.visibility.as_str())
+    .bind(validated.markdown)
+    .bind(validated.code_hash)
+    .execute(&state.pool)
+    .await
+    .map_err(map_api_sqlite_error)?;
+
+    let note = load_note_by_id_api(&state.pool, result.last_insert_rowid()).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(note_to_api_response(&state, note)),
+    ))
+}
+
+async fn api_update_note(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+    Json(payload): Json<ApiNotePayload>,
+) -> ApiResult<Json<ApiNoteResponse>> {
+    let _api_key = authenticate_api_key(&state, &headers).await?;
+    let existing = load_note_by_id_api(&state.pool, id).await?;
+    let form = api_note_payload_to_form(payload);
+    let validated = validate_note_form(Some(&existing), &form)
+        .await
+        .map_err(ApiError::bad_request)?;
+
+    sqlx::query(
+        r#"
+        UPDATE notes
+        SET title = ?1, slug = ?2, visibility = ?3, markdown = ?4, code_hash = ?5, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?6
+        "#,
+    )
+    .bind(validated.title)
+    .bind(validated.slug)
+    .bind(validated.visibility.as_str())
+    .bind(validated.markdown)
+    .bind(validated.code_hash)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(map_api_sqlite_error)?;
+
+    let note = load_note_by_id_api(&state.pool, id).await?;
+    Ok(Json(note_to_api_response(&state, note)))
+}
+
+async fn api_delete_note(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    let _api_key = authenticate_api_key(&state, &headers).await?;
+    let _note = load_note_by_id_api(&state.pool, id).await?;
+
+    sqlx::query("DELETE FROM notes WHERE id = ?1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn is_admin(session: &Session) -> AppResult<bool> {
@@ -1310,3 +1821,349 @@ impl IntoResponse for AppError {
 }
 
 type AppResult<T> = Result<T, AppError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        Router,
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    async fn test_state() -> Arc<AppState> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&pool).await.unwrap();
+
+        let config = Config {
+            admin_username: "admin".into(),
+            admin_password: "secret".into(),
+            bind_addr: "127.0.0.1:0".into(),
+            database_url: "sqlite::memory:".into(),
+            root_redirect_url: "/dashboard".into(),
+            public_base_url: Url::parse("http://localhost:8080/").unwrap(),
+            passkey_rp_name: "TabNotes Tests".into(),
+            hide_footer: false,
+        };
+        let webauthn = build_webauthn(&config).unwrap();
+
+        Arc::new(AppState {
+            pool,
+            config,
+            webauthn,
+            pending_registrations: Mutex::new(HashMap::new()),
+            pending_authentications: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn test_app(state: Arc<AppState>) -> Router {
+        app_router(state)
+    }
+
+    async fn response_text(response: Response) -> String {
+        String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    async fn admin_cookie(app: &Router) -> String {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/login")
+                    .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "username=admin&password=secret&next=%2Fdashboard",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn init_db_creates_api_keys_table() {
+        let state = test_state().await;
+        let exists = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'api_keys'",
+        )
+        .fetch_optional(&state.pool)
+        .await
+        .unwrap();
+
+        assert_eq!(exists.as_deref(), Some("api_keys"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_renders_api_keys_section() {
+        let state = test_state().await;
+        let app = test_app(state);
+        let cookie = admin_cookie(&app).await;
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/dashboard")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("API keys"));
+        assert!(!body.contains("Use this for authenticated requests to the notes CRUD API."));
+    }
+
+    #[tokio::test]
+    async fn note_page_renders_delete_button_for_admin() {
+        let state = test_state().await;
+        sqlx::query(
+            "INSERT INTO notes (title, slug, visibility, markdown, updated_at) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
+        )
+        .bind("Delete me")
+        .bind("delete-me")
+        .bind("public")
+        .bind("Hello")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let app = test_app(state);
+        let cookie = admin_cookie(&app).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/notes/delete-me")
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("Delete note"));
+    }
+
+    #[tokio::test]
+    async fn editor_page_renders_delete_button_for_existing_note() {
+        let state = test_state().await;
+        let result = sqlx::query(
+            "INSERT INTO notes (title, slug, visibility, markdown, updated_at) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
+        )
+        .bind("Edit me")
+        .bind("edit-me")
+        .bind("admin")
+        .bind("Hello")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let note_id = result.last_insert_rowid();
+
+        let app = test_app(state);
+        let cookie = admin_cookie(&app).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/admin/notes/{note_id}/edit"))
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("Delete note"));
+        assert!(body.contains(&format!("/admin/notes/{note_id}/delete")));
+    }
+
+    #[tokio::test]
+    async fn dashboard_renders_passkey_delete_button_and_delete_route_works() {
+        let state = test_state().await;
+        let result = sqlx::query("INSERT INTO passkeys (label, credential_json) VALUES (?1, ?2)")
+            .bind("MacBook Touch ID")
+            .bind("{}")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let passkey_id = result.last_insert_rowid();
+
+        let app = test_app(state.clone());
+        let cookie = admin_cookie(&app).await;
+
+        let dashboard_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/dashboard")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dashboard_response.status(), StatusCode::OK);
+        let dashboard_body = response_text(dashboard_response).await;
+        assert!(dashboard_body.contains(&format!("/admin/passkeys/{passkey_id}/delete")));
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/admin/passkeys/{passkey_id}/delete"))
+                    .header(header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::SEE_OTHER);
+
+        let remaining = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM passkeys WHERE id = ?1")
+            .bind(passkey_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn dashboard_styles_include_api_key_form_spacing() {
+        let css = include_str!("../static/app.css");
+
+        assert!(css.contains("#api-key-create-form + .api-key-list"));
+        assert!(css.contains("margin-top: 16px;"));
+    }
+
+    #[test]
+    fn mobile_styles_contain_compact_topbar_rules() {
+        let css = include_str!("../static/app.css");
+
+        assert!(css.contains(".topbar-actions > *"));
+        assert!(css.contains("border-radius: var(--radius-xl);"));
+    }
+
+    #[tokio::test]
+    async fn api_routes_require_api_key_and_support_note_deletion() {
+        let state = test_state().await;
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                key_prefix TEXT NOT NULL,
+                key_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TEXT
+            )
+            "#,
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let raw_key = "tn_testprefix12_1234567890abcdef1234567890abcdef";
+        sqlx::query("INSERT INTO api_keys (label, key_prefix, key_hash) VALUES (?1, ?2, ?3)")
+            .bind("Integration test")
+            .bind("testprefix12")
+            .bind(hash_secret(raw_key).unwrap())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        let app = test_app(state.clone());
+
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notes")
+                    .header(header::AUTHORIZATION, format!("Bearer {raw_key}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({
+                            "title": "API note",
+                            "slug": "api-note",
+                            "markdown": "Created from test",
+                            "visibility": "admin"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+        let created_body = response_text(create_response).await;
+        let created_note: serde_json::Value = serde_json::from_str(&created_body).unwrap();
+        let note_id = created_note["id"].as_i64().unwrap();
+
+        let delete_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/notes/{note_id}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {raw_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+        let remaining = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM notes WHERE id = ?1")
+            .bind(note_id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
+}

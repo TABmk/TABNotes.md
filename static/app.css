@@ -120,7 +120,9 @@ button {
 .topbar-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .topbar-actions form {
@@ -417,6 +419,17 @@ button,
   border: 1px solid var(--line);
 }
 
+.danger-button {
+  border-color: rgba(255, 107, 129, 0.24);
+  color: #ffd7dd;
+  background: rgba(255, 107, 129, 0.08);
+}
+
+.danger-button:hover {
+  border-color: rgba(255, 107, 129, 0.4);
+  background: rgba(255, 107, 129, 0.14);
+}
+
 .inline-button {
   white-space: nowrap;
 }
@@ -442,6 +455,20 @@ button,
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.03);
   color: var(--ink-soft);
+}
+
+.api-key-notice {
+  overflow-wrap: anywhere;
+}
+
+.api-key-secret {
+  display: block;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--ink);
+  font-size: 13px;
 }
 
 .notice.error {
@@ -480,7 +507,9 @@ button,
 }
 
 #passkey-register-form + .empty-block,
-#passkey-register-form + .passkey-list {
+#passkey-register-form + .passkey-list,
+#api-key-create-form + .empty-block,
+#api-key-create-form + .api-key-list {
   margin-top: 16px;
 }
 
@@ -497,7 +526,7 @@ button,
 }
 
 .note-row {
-  grid-template-columns: minmax(0, 1fr) 132px;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .note-row:hover {
@@ -513,9 +542,22 @@ button,
 }
 
 .note-row-main,
-.note-open-link {
+.note-open-link,
+.note-row-actions,
+.note-row-actions form {
   position: relative;
   z-index: 2;
+}
+
+.note-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.note-row-actions form {
+  margin: 0;
 }
 
 .note-row-main {
@@ -542,6 +584,15 @@ button,
   margin-top: 3px;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.api-key-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.api-key-row form,
+.reader-meta form {
+  margin: 0;
 }
 
 .empty-block {
@@ -800,12 +851,40 @@ button,
 }
 
 @media (max-width: 640px) {
-  .topbar,
-  .editor-toolbar,
-  .passkey-row,
-  .reader-meta {
+  .topbar {
     flex-direction: column;
     align-items: stretch;
+    border-radius: var(--radius-xl);
+    padding: 12px;
+  }
+
+  .topbar-actions,
+  .editor-toolbar,
+  .passkey-row,
+  .reader-meta,
+  .api-key-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .brand {
+    width: 100%;
+    justify-content: center;
+    border-radius: var(--radius-md);
+  }
+
+  .topbar-actions > *,
+  .note-row-actions > * {
+    width: 100%;
+  }
+
+  .topbar-actions .ghost-link,
+  .topbar-actions .ghost-button,
+  .note-row-actions .ghost-link,
+  .note-row-actions .ghost-button,
+  .reader-meta .ghost-button,
+  .reader-meta .ghost-link {
+    width: 100%;
   }
 
   .page-actions {
@@ -816,8 +895,13 @@ button,
     width: 100%;
   }
 
-  .note-row {
+  .note-row,
+  .api-key-row {
     grid-template-columns: 1fr;
+  }
+
+  .note-row-actions {
+    justify-content: stretch;
   }
 
   .site-shell {

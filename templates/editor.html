@@ -6,6 +6,11 @@
     {% if !share_url.is_empty() %}
     <a class="ghost-link full-width-button" href="{{ share_url }}" target="_blank" rel="noreferrer">Open</a>
     {% endif %}
+    {% if !delete_url.is_empty() %}
+    <form action="{{ delete_url }}" method="post" onsubmit="return confirm('Delete this note?');">
+      <button class="ghost-button danger-button full-width-button" type="submit">Delete note</button>
+    </form>
+    {% endif %}
   </section>
 
   {% if !error_message.is_empty() %}
