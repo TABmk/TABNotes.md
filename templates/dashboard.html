@@ -36,7 +36,7 @@
             </div>
           </div>
           <div class="note-row-actions">
-            <a class="ghost-link note-open-link" href="/notes/{{ note.slug }}" target="_blank" rel="noreferrer">Open</a>
+            <a class="ghost-link note-open-link" href="{{ note.public_path }}" target="_blank" rel="noreferrer">Open</a>
             <form action="/admin/notes/{{ note.id }}/delete" method="post" onsubmit="return confirm('Delete this note?');">
               <button class="ghost-button danger-button" type="submit">Delete</button>
             </form>

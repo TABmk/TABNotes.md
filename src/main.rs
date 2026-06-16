@@ -32,6 +32,11 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tower_sessions::{MemoryStore, Session, SessionManagerLayer};
 use tracing::{error, info};
 use url::Url;
+use utoipa::{
+    Modify, OpenApi, ToSchema,
+    openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme},
+};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
@@ -94,8 +99,11 @@ struct Config {
     database_url: String,
     root_redirect_url: String,
     public_base_url: Url,
+    notes_path_prefix: String,
     passkey_rp_name: String,
     hide_footer: bool,
+    hide_swagger: bool,
+    hide_api_docs: bool,
 }
 
 impl Config {
@@ -114,9 +122,17 @@ impl Config {
                 .context("missing PUBLIC_BASE_URL env var for passkeys and absolute links")?,
         )
         .context("invalid PUBLIC_BASE_URL")?;
+        let notes_path_prefix = parse_path_segment(
+            "NOTES_PATH_PREFIX",
+            &std::env::var("NOTES_PATH_PREFIX").unwrap_or_else(|_| "notes".into()),
+        )?;
         let passkey_rp_name =
             std::env::var("PASSKEY_RP_NAME").unwrap_or_else(|_| "TabNotes".into());
         let hide_footer = env_flag("HIDE_FOOTER");
+        let hide_swagger = std::env::var("HIDE_SWAGGER")
+            .map(|value| value.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(true);
+        let hide_api_docs = env_flag("HIDE_API_DOCS");
 
         Ok(Self {
             admin_username,
@@ -125,8 +141,11 @@ impl Config {
             database_url,
             root_redirect_url,
             public_base_url,
+            notes_path_prefix,
             passkey_rp_name,
             hide_footer,
+            hide_swagger,
+            hide_api_docs,
         })
     }
 }
@@ -237,7 +256,7 @@ struct ApiKeyRecord {
 struct DashboardNote {
     id: i64,
     title: String,
-    slug: String,
+    public_path: String,
     visibility_icon: String,
     visibility_label: String,
     updated_at: String,
@@ -420,16 +439,21 @@ struct ApiOk {
     ok: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct ApiNotePayload {
+    /// Note title.
     title: String,
+    /// Optional URL slug. If omitted, the server generates one.
     slug: Option<String>,
+    /// Markdown source for the note body.
     markdown: String,
+    /// Visibility mode: `admin`, `public`, or `code`.
     visibility: String,
+    /// Required when `visibility` is `code`.
     access_code: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ApiNoteResponse {
     id: i64,
     title: String,
@@ -441,10 +465,53 @@ struct ApiNoteResponse {
     share_url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct ApiErrorBody {
     error: String,
 }
+
+struct ApiSecurity;
+
+impl Modify for ApiSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "api_key",
+                SecurityScheme::ApiKey(ApiKey::Header(ApiKeyValue::new("X-API-Key"))),
+            );
+            components.add_security_scheme(
+                "bearer_auth",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .description(Some("Use the raw TabNotes API key as a Bearer token."))
+                        .build(),
+                ),
+            );
+        }
+    }
+}
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        api_list_notes,
+        api_get_note,
+        api_create_note,
+        api_update_note,
+        api_delete_note
+    ),
+    components(schemas(ApiNotePayload, ApiNoteResponse, ApiErrorBody)),
+    modifiers(&ApiSecurity),
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    tags(
+        (name = "notes", description = "CRUD API for TabNotes notes.")
+    )
+)]
+struct ApiDoc;
 
 struct ApiError {
     status: StatusCode,
@@ -565,8 +632,9 @@ fn app_router(state: Arc<AppState>) -> Router {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(state.config.public_base_url.scheme() == "https")
         .with_same_site(tower_sessions::cookie::SameSite::Lax);
-
-    Router::new()
+    let shared_note_route = format!("/{}/{{slug}}", state.config.notes_path_prefix);
+    let shared_note_code_route = format!("/{}/{}/code", state.config.notes_path_prefix, "{slug}");
+    let mut router = Router::new()
         .route("/", get(root_redirect))
         .route("/login", get(login_page).post(login_submit))
         .route("/logout", post(logout))
@@ -585,20 +653,35 @@ fn app_router(state: Arc<AppState>) -> Router {
         .route("/admin/api-keys/{id}/delete", post(delete_api_key))
         .route("/auth/passkey/start", post(start_passkey_authentication))
         .route("/auth/passkey/finish", post(finish_passkey_authentication))
-        .route("/notes/{slug}", get(view_note))
-        .route("/notes/{slug}/code", post(unlock_code_note))
+        .route(shared_note_route.as_str(), get(view_note))
+        .route(shared_note_code_route.as_str(), post(unlock_code_note))
         .route("/api/notes", get(api_list_notes).post(api_create_note))
         .route(
             "/api/notes/{id}",
             get(api_get_note)
                 .put(api_update_note)
                 .delete(api_delete_note),
-        )
+        );
+
+    if !state.config.hide_api_docs {
+        router = router.route("/api-docs/openapi.json", get(openapi_json));
+    }
+
+    if !state.config.hide_swagger && !state.config.hide_api_docs {
+        router = router
+            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
+    }
+
+    router
         .fallback(get(not_found_route))
         .nest_service("/static", ServeDir::new("static"))
         .layer(session_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
 }
 
 async fn root_redirect(State(state): State<Arc<AppState>>) -> Redirect {
@@ -694,7 +777,7 @@ async fn dashboard(State(state): State<Arc<AppState>>, session: Session) -> AppR
         DashboardNote {
             id: note.id,
             title: note.title.clone(),
-            slug: note.slug.clone(),
+            public_path: shared_note_path(&state.config, &note.slug),
             visibility_icon,
             visibility_label,
             updated_at: note.updated_at,
@@ -1097,10 +1180,11 @@ async fn view_note(
     match note.visibility_enum()? {
         NoteVisibility::Admin => {
             if !admin {
-                return Ok(
-                    Redirect::to(&login_redirect_for(&format!("/notes/{}", note.slug)))
-                        .into_response(),
-                );
+                return Ok(Redirect::to(&login_redirect_for(&shared_note_path(
+                    &state.config,
+                    &note.slug,
+                )))
+                .into_response());
             }
         }
         NoteVisibility::Public => {}
@@ -1117,7 +1201,7 @@ async fn view_note(
                     noindex: true,
                     show_footer: !state.config.hide_footer,
                     error_message: String::new(),
-                    form_action: format!("/notes/{}/code", note.slug),
+                    form_action: shared_note_code_path(&state.config, &note.slug),
                 };
                 return render_page(&template, true);
             }
@@ -1148,7 +1232,7 @@ async fn unlock_code_note(
 ) -> AppResult<Response> {
     let note = load_note_by_slug(&state.pool, &slug).await?;
     if note.visibility_enum()? != NoteVisibility::Code {
-        return Ok(Redirect::to(&format!("/notes/{}", note.slug)).into_response());
+        return Ok(Redirect::to(&shared_note_path(&state.config, &note.slug)).into_response());
     }
 
     let Some(code_hash) = note.code_hash.as_deref() else {
@@ -1166,7 +1250,7 @@ async fn unlock_code_note(
             .unwrap_or_default();
         grants.insert(note.id);
         session.insert(NOTE_GRANTS_KEY, grants).await?;
-        return Ok(Redirect::to(&format!("/notes/{}", note.slug)).into_response());
+        return Ok(Redirect::to(&shared_note_path(&state.config, &note.slug)).into_response());
     }
 
     let template = CodeGateTemplate {
@@ -1176,7 +1260,7 @@ async fn unlock_code_note(
         noindex: true,
         show_footer: !state.config.hide_footer,
         error_message: "Invalid access code.".into(),
-        form_action: format!("/notes/{}/code", note.slug),
+        form_action: shared_note_code_path(&state.config, &note.slug),
     };
     render_page(&template, true)
 }
@@ -1195,12 +1279,7 @@ fn build_editor_template(
     let share_url = if slug.is_empty() {
         String::new()
     } else {
-        state
-            .config
-            .public_base_url
-            .join(&format!("notes/{slug}"))
-            .map(|url| url.to_string())
-            .unwrap_or_default()
+        share_url_for_slug(state, &slug)
     };
 
     EditorTemplate {
@@ -1428,9 +1507,17 @@ fn share_url_for_slug(state: &AppState, slug: &str) -> String {
     state
         .config
         .public_base_url
-        .join(&format!("notes/{slug}"))
+        .join(&format!("{}/{}", state.config.notes_path_prefix, slug))
         .map(|url| url.to_string())
         .unwrap_or_default()
+}
+
+fn shared_note_path(config: &Config, slug: &str) -> String {
+    format!("/{}/{}", config.notes_path_prefix, slug)
+}
+
+fn shared_note_code_path(config: &Config, slug: &str) -> String {
+    format!("/{}/{}/code", config.notes_path_prefix, slug)
 }
 
 fn note_to_api_response(state: &AppState, note: NoteRecord) -> ApiNoteResponse {
@@ -1446,6 +1533,19 @@ fn note_to_api_response(state: &AppState, note: NoteRecord) -> ApiNoteResponse {
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/notes",
+    tag = "notes",
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    responses(
+        (status = 200, description = "Notes returned successfully.", body = [ApiNoteResponse]),
+        (status = 401, description = "Missing or invalid API key.", body = ApiErrorBody)
+    )
+)]
 async fn api_list_notes(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1463,6 +1563,23 @@ async fn api_list_notes(
     Ok(Json(notes))
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/notes/{id}",
+    tag = "notes",
+    params(
+        ("id" = i64, Path, description = "Note identifier.")
+    ),
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    responses(
+        (status = 200, description = "Note returned successfully.", body = ApiNoteResponse),
+        (status = 401, description = "Missing or invalid API key.", body = ApiErrorBody),
+        (status = 404, description = "Note not found.", body = ApiErrorBody)
+    )
+)]
 async fn api_get_note(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1473,6 +1590,22 @@ async fn api_get_note(
     Ok(Json(note_to_api_response(&state, note)))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/notes",
+    tag = "notes",
+    request_body = ApiNotePayload,
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    responses(
+        (status = 201, description = "Note created successfully.", body = ApiNoteResponse),
+        (status = 400, description = "Invalid request payload.", body = ApiErrorBody),
+        (status = 401, description = "Missing or invalid API key.", body = ApiErrorBody),
+        (status = 409, description = "Slug already exists.", body = ApiErrorBody)
+    )
+)]
 async fn api_create_note(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1506,6 +1639,26 @@ async fn api_create_note(
     ))
 }
 
+#[utoipa::path(
+    put,
+    path = "/api/notes/{id}",
+    tag = "notes",
+    request_body = ApiNotePayload,
+    params(
+        ("id" = i64, Path, description = "Note identifier.")
+    ),
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    responses(
+        (status = 200, description = "Note updated successfully.", body = ApiNoteResponse),
+        (status = 400, description = "Invalid request payload.", body = ApiErrorBody),
+        (status = 401, description = "Missing or invalid API key.", body = ApiErrorBody),
+        (status = 404, description = "Note not found.", body = ApiErrorBody),
+        (status = 409, description = "Slug already exists.", body = ApiErrorBody)
+    )
+)]
 async fn api_update_note(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1540,6 +1693,23 @@ async fn api_update_note(
     Ok(Json(note_to_api_response(&state, note)))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/notes/{id}",
+    tag = "notes",
+    params(
+        ("id" = i64, Path, description = "Note identifier.")
+    ),
+    security(
+        ("api_key" = []),
+        ("bearer_auth" = [])
+    ),
+    responses(
+        (status = 204, description = "Note deleted successfully."),
+        (status = 401, description = "Missing or invalid API key.", body = ApiErrorBody),
+        (status = 404, description = "Note not found.", body = ApiErrorBody)
+    )
+)]
 async fn api_delete_note(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1572,6 +1742,17 @@ async fn require_admin(session: &Session, next: &str) -> AppResult<()> {
 
 fn login_redirect_for(next: &str) -> String {
     format!("/login?next={}", urlencoding::encode(next))
+}
+
+fn parse_path_segment(name: &str, value: &str) -> anyhow::Result<String> {
+    let segment = value.trim().trim_matches('/').to_string();
+    if segment.is_empty() {
+        return Err(anyhow!("{name} must not be empty"));
+    }
+    if segment.contains('/') {
+        return Err(anyhow!("{name} must be a single path segment"));
+    }
+    Ok(segment)
 }
 
 fn sanitize_next(next: Option<&str>) -> String {
@@ -1862,8 +2043,11 @@ mod tests {
             database_url: "sqlite::memory:".into(),
             root_redirect_url: "/dashboard".into(),
             public_base_url: Url::parse("http://localhost:8080/").unwrap(),
+            notes_path_prefix: "notes".into(),
             passkey_rp_name: "TabNotes Tests".into(),
             hide_footer: false,
+            hide_swagger: true,
+            hide_api_docs: false,
         };
         let webauthn = build_webauthn(&config).unwrap();
 
@@ -1871,6 +2055,20 @@ mod tests {
             pool,
             config,
             webauthn,
+            pending_registrations: Mutex::new(HashMap::new()),
+            pending_authentications: Mutex::new(HashMap::new()),
+        })
+    }
+
+    async fn test_state_with_notes_path(prefix: &str) -> Arc<AppState> {
+        let state = test_state().await;
+        let mut config = state.config.clone();
+        config.notes_path_prefix = prefix.to_string();
+
+        Arc::new(AppState {
+            pool: state.pool.clone(),
+            config,
+            webauthn: state.webauthn.clone(),
             pending_registrations: Mutex::new(HashMap::new()),
             pending_authentications: Mutex::new(HashMap::new()),
         })
@@ -2002,6 +2200,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_notes_path_prefix_serves_shared_note() {
+        let state = test_state_with_notes_path("links").await;
+        sqlx::query(
+            "INSERT INTO notes (title, slug, visibility, markdown, updated_at) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
+        )
+        .bind("Custom route")
+        .bind("custom-route")
+        .bind("public")
+        .bind("Hello")
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let app = test_app(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/links/custom-route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn editor_page_renders_delete_button_for_existing_note() {
         let state = test_state().await;
         let result = sqlx::query(
@@ -2101,6 +2328,48 @@ mod tests {
 
         assert!(css.contains(".topbar-actions > *"));
         assert!(css.contains("border-radius: var(--radius-xl);"));
+    }
+
+    #[tokio::test]
+    async fn openapi_json_lists_note_routes() {
+        let state = test_state().await;
+        let app = test_app(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api-docs/openapi.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response_text(response).await;
+        assert!(body.contains("\"/api/notes\""));
+        assert!(body.contains("\"/api/notes/{id}\""));
+        assert!(body.contains("\"X-API-Key\""));
+    }
+
+    #[tokio::test]
+    async fn swagger_ui_is_hidden_by_default() {
+        let state = test_state().await;
+        let app = test_app(state);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/swagger-ui")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

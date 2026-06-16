@@ -49,8 +49,11 @@ It has a single admin account from environment variables, SQLite storage, render
 | `DATABASE_URL` | no | `sqlite://data/tabnotes.db` | SQLite connection string |
 | `ROOT_REDIRECT_URL` | no | `/dashboard` | URL used when someone opens `/` |
 | `PUBLIC_BASE_URL` | yes | - | Public base URL used for passkeys and shared links |
+| `NOTES_PATH_PREFIX` | no | `notes` | Path segment used for shared note URLs, for example `notes` -> `/notes/:slug` |
 | `PASSKEY_RP_NAME` | no | `TabNotes` | WebAuthn relying-party display name |
 | `HIDE_FOOTER` | no | `false` | Set to `true` to hide the `Made with ... by TAB_mk` footer |
+| `HIDE_SWAGGER` | no | `true` | Set to `false` to expose Swagger UI at `/swagger-ui` |
+| `HIDE_API_DOCS` | no | `false` | Set to `true` to hide `/api-docs/openapi.json`; this also keeps Swagger unavailable |
 | `RUST_LOG` | no | `info` | Rust log filter |
 
 ## Important passkey note
@@ -69,6 +72,7 @@ export ADMIN_USERNAME=admin
 export ADMIN_PASSWORD='change-this'
 export PUBLIC_BASE_URL='http://localhost:8080'
 export ROOT_REDIRECT_URL='/dashboard'
+export NOTES_PATH_PREFIX='notes'
 
 cargo run
 ```
@@ -88,10 +92,13 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=change-this-now
 PUBLIC_BASE_URL=https://notes.example.com
 ROOT_REDIRECT_URL=/dashboard
+NOTES_PATH_PREFIX=notes
 DATABASE_URL=sqlite://data/tabnotes.db
 BIND_ADDR=0.0.0.0:8080
 PASSKEY_RP_NAME=TabNotes
 HIDE_FOOTER=false
+HIDE_SWAGGER=true
+HIDE_API_DOCS=false
 RUST_LOG=info
 EOF
 
@@ -130,10 +137,13 @@ docker run -d \
   -e ADMIN_PASSWORD='change-this-now' \
   -e PUBLIC_BASE_URL='https://notes.example.com' \
   -e ROOT_REDIRECT_URL='/dashboard' \
+  -e NOTES_PATH_PREFIX='notes' \
   -e DATABASE_URL='sqlite://data/tabnotes.db' \
   -e BIND_ADDR='0.0.0.0:8080' \
   -e PASSKEY_RP_NAME='TabNotes' \
   -e HIDE_FOOTER='false' \
+  -e HIDE_SWAGGER='true' \
+  -e HIDE_API_DOCS='false' \
   -v tabnotes_data:/app/data \
   tabnotes
 ```
@@ -147,6 +157,7 @@ docker run -d \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD='change-this-now' \
   -e PUBLIC_BASE_URL='http://localhost:8080' \
+  -e NOTES_PATH_PREFIX='notes' \
   -v "$(pwd)/data:/app/data" \
   tabnotes
 ```
@@ -182,7 +193,9 @@ If you started the container with `docker run`, changing env vars later requires
 - `/admin/api-keys/:id/delete` delete API key
 - `/api/notes` list or create notes with an API key
 - `/api/notes/:id` read, update, or delete a note with an API key
-- `/notes/:slug` rendered shared note page
+- `/api-docs/openapi.json` generated OpenAPI spec when API docs are enabled
+- `/swagger-ui` Swagger UI when explicitly enabled
+- `/<NOTES_PATH_PREFIX>/:slug` rendered shared note page
 
 ## API usage
 

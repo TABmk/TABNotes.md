@@ -27,6 +27,9 @@ USER tabnotes
 
 ENV BIND_ADDR=0.0.0.0:8080
 ENV DATABASE_URL=sqlite://data/tabnotes.db
+ENV NOTES_PATH_PREFIX=notes
+ENV HIDE_SWAGGER=true
+ENV HIDE_API_DOCS=false
 
 EXPOSE 8080
 

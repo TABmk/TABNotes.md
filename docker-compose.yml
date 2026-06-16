@@ -12,8 +12,11 @@ services:
       DATABASE_URL: ${DATABASE_URL:-sqlite://data/tabnotes.db}
       ROOT_REDIRECT_URL: ${ROOT_REDIRECT_URL:-/dashboard}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL}
+      NOTES_PATH_PREFIX: ${NOTES_PATH_PREFIX:-notes}
       PASSKEY_RP_NAME: ${PASSKEY_RP_NAME:-TabNotes}
       HIDE_FOOTER: ${HIDE_FOOTER:-false}
+      HIDE_SWAGGER: ${HIDE_SWAGGER:-true}
+      HIDE_API_DOCS: ${HIDE_API_DOCS:-false}
       RUST_LOG: ${RUST_LOG:-info}
     expose:
       - "8080"
