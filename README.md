@@ -1,6 +1,9 @@
-__Help__ [<img src="https://img.shields.io/github/issues/TABmk/TABNotes.md">](https://github.com/TABmk/TABNotes.md/issues?q=is%3Aopen+is%3Aissue) [<img src="https://img.shields.io/github/issues-pr/TABmk/TABNotes.md">](https://github.com/TABmk/TABNotes.md/pulls?q=is%3Aopen+is%3Apr)
-
-__Rate__ [<img src="https://img.shields.io/github/stars/TABmk/TABNotes.md?style=social">](https://github.com/TABmk/TABNotes.md)
+[![Docker Image](https://img.shields.io/github/actions/workflow/status/TABmk/TABNotes.md/docker-image.yml?label=docker%20publish)](https://github.com/TABmk/TABNotes.md/actions/workflows/docker-image.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/tabmk/tabnotes?logo=docker)](https://hub.docker.com/r/tabmk/tabnotes)
+[![Issues](https://img.shields.io/github/issues/TABmk/TABNotes.md)](https://github.com/TABmk/TABNotes.md/issues)
+[![Pull Requests](https://img.shields.io/github/issues-pr/TABmk/TABNotes.md)](https://github.com/TABmk/TABNotes.md/pulls)
+[![License](https://img.shields.io/github/license/TABmk/TABNotes.md)](https://github.com/TABmk/TABNotes.md/blob/master/LICENSE)
+[![Stars](https://img.shields.io/github/stars/TABmk/TABNotes.md?style=social)](https://github.com/TABmk/TABNotes.md)
 
 # TABNotes.md
 
@@ -8,25 +11,36 @@ __Rate__ [<img src="https://img.shields.io/github/stars/TABmk/TABNotes.md?style=
   <img src="preview/preview.png" />
 </p>
 
-TabNotes is a lightweight self-hosted Markdown notes service written in Rust.
+TABNotes is a lightweight self-hosted Markdown notes service written in Rust. It keeps the model simple: one admin account, SQLite storage, clean sharing modes, and an API for scripted note publishing.
 
-It has a single admin account from environment variables, SQLite storage, rendered shared pages, optional passkey login, and a minimal dashboard for creating and editing notes.
+## Quick Install
+
+Run the published image with the smallest practical setup:
+
+```bash
+docker run -d \
+  --name tabnotes \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD='change-this-now' \
+  -e PUBLIC_BASE_URL='http://localhost:8080' \
+  -v tabnotes_data:/app/data \
+  tabmk/tabnotes
+```
+
+Open `http://localhost:8080/login` and sign in with the configured admin credentials. For public deployment, set `PUBLIC_BASE_URL` to your real HTTPS URL.
 
 ## Features
 
-- no self-registration flow
-- admin can register passkeys after signing in
-- minimal dashboard with note list, editing, and deletion
-- API key management in the dashboard for scripted note access
-- `/` redirects to `ROOT_REDIRECT_URL`
-- notes use Markdown with live rendered preview while editing
-- shared links open as rendered Markdown pages
-- note visibility modes:
-  - `admin`: requires admin session and redirects to `/login` if missing
-  - `public`: open to anyone, with `noindex`
-  - `code`: prompts for a note code before showing the rendered note
-- SQLite database
-- Dockerfile and `docker-compose.yml` included
+- Single admin account with no self-registration flow
+- Markdown editor with live preview
+- Three visibility modes: `admin`, `public`, and `code`
+- Shared rendered note pages with clean URLs
+- API key management for scripted publishing and automation
+- Passkey support for admin login
+- SQLite storage with a minimal dashboard
+- Ready for Docker, Docker Compose, or local Rust runs
 
 ## Screenshots
 
@@ -39,33 +53,117 @@ It has a single admin account from environment variables, SQLite storage, render
   <img width="49%" src="preview/4.png" />
 </p>
 
-## Environment variables
+<details>
+<summary><b><u><font size="+1">Agent Skill</font></u></b></summary>
+
+The project includes an agent skill for publishing TABNotes through the API with bundled `curl` scripts and built-in environment validation. An agent can install it by pointing at [https://github.com/TABmk/TABNotes.md/tree/master/skill](https://github.com/TABmk/TABNotes.md/tree/master/skill).
+</details>
+
+<details>
+<summary><b><u><font size="+1">Docker Compose</font></u></b></summary>
+
+Example `compose.yaml`:
+
+```yaml
+services:
+  tabnotes:
+    image: tabmk/tabnotes:latest
+    container_name: tabnotes
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: change-this-now
+      PUBLIC_BASE_URL: http://localhost:8080
+      ROOT_REDIRECT_URL: /dashboard
+      NOTES_PATH_PREFIX: notes
+      DATABASE_URL: sqlite://data/tabnotes.db
+      PASSKEY_RP_NAME: TabNotes
+      HIDE_FOOTER: "false"
+      HIDE_SWAGGER: "true"
+      HIDE_API_DOCS: "false"
+      RUST_LOG: info
+    volumes:
+      - tabnotes_data:/app/data
+
+volumes:
+  tabnotes_data:
+```
+
+Run it with:
+
+```bash
+docker compose up -d
+```
+
+If you change environment variables later, recreate the container:
+
+```bash
+docker compose up -d --force-recreate
+```
+</details>
+
+<details>
+<summary><b><u><font size="+1">Docker Run</font></u></b></summary>
+
+Run the published image directly:
+
+```bash
+docker run -d \
+  --name tabnotes \
+  --restart unless-stopped \
+  -p 8080:8080 \
+  -e ADMIN_USERNAME=admin \
+  -e ADMIN_PASSWORD='change-this-now' \
+  -e PUBLIC_BASE_URL='http://localhost:8080' \
+  -e ROOT_REDIRECT_URL='/dashboard' \
+  -e NOTES_PATH_PREFIX='notes' \
+  -e DATABASE_URL='sqlite://data/tabnotes.db' \
+  -e PASSKEY_RP_NAME='TabNotes' \
+  -e HIDE_FOOTER='false' \
+  -e HIDE_SWAGGER='true' \
+  -e HIDE_API_DOCS='false' \
+  -e RUST_LOG='info' \
+  -v tabnotes_data:/app/data \
+  tabmk/tabnotes
+```
+
+If you prefer a host bind mount instead of a named volume:
+
+```bash
+mkdir -p data
+sudo chown -R 10001:10001 data
+```
+
+Then replace the volume flag with:
+
+```bash
+-v "$(pwd)/data:/app/data"
+```
+</details>
+
+<details>
+<summary><b><u><font size="+1">Environment Variables</font></u></b></summary>
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `ADMIN_USERNAME` | yes | - | Admin login username |
 | `ADMIN_PASSWORD` | yes | - | Admin login password |
-| `BIND_ADDR` | no | `0.0.0.0:8080` | Listen address inside the container or host |
+| `PUBLIC_BASE_URL` | yes | - | Public base URL used for shared links and passkeys |
+| `BIND_ADDR` | no | `0.0.0.0:8080` | Listen address |
 | `DATABASE_URL` | no | `sqlite://data/tabnotes.db` | SQLite connection string |
-| `ROOT_REDIRECT_URL` | no | `/dashboard` | URL used when someone opens `/` |
-| `PUBLIC_BASE_URL` | yes | - | Public base URL used for passkeys and shared links |
-| `NOTES_PATH_PREFIX` | no | `notes` | Path segment used for shared note URLs, for example `notes` -> `/notes/:slug` |
-| `PASSKEY_RP_NAME` | no | `TabNotes` | WebAuthn relying-party display name |
-| `HIDE_FOOTER` | no | `false` | Set to `true` to hide the `Made with ... by TAB_mk` footer |
-| `HIDE_SWAGGER` | no | `true` | Set to `false` to expose Swagger UI at `/swagger-ui` |
-| `HIDE_API_DOCS` | no | `false` | Set to `true` to hide `/api-docs/openapi.json`; this also keeps Swagger unavailable |
+| `ROOT_REDIRECT_URL` | no | `/dashboard` | Redirect target for `/` |
+| `NOTES_PATH_PREFIX` | no | `notes` | Shared note path prefix |
+| `PASSKEY_RP_NAME` | no | `TabNotes` | WebAuthn relying-party name |
+| `HIDE_FOOTER` | no | `false` | Hide the footer |
+| `HIDE_SWAGGER` | no | `true` | Expose Swagger UI when set to `false` |
+| `HIDE_API_DOCS` | no | `false` | Hide `/api-docs/openapi.json` when set to `true` |
 | `RUST_LOG` | no | `info` | Rust log filter |
+</details>
 
-## Important passkey note
-
-Passkeys require a secure origin. In practice that means:
-
-- `https://your-domain.example`
-- `http://localhost` for local development only
-
-If you run this only on an internal Docker network, passkeys still need to be used from a browser that reaches the app through a valid secure origin.
-
-## Local run
+<details>
+<summary><b><u><font size="+1">Local Development</font></u></b></summary>
 
 ```bash
 export ADMIN_USERNAME=admin
@@ -78,135 +176,28 @@ cargo run
 ```
 
 Then open `http://localhost:8080/login`.
+</details>
 
-## Docker Compose
+<details>
+<summary><b><u><font size="+1">Passkeys</font></u></b></summary>
 
-The included `docker-compose.yml` is set up for internal Docker networking by default through `expose`.
-It uses a Docker named volume for SQLite storage so you do not hit host bind-mount permission issues with the non-root container user.
+Passkeys require a secure origin:
 
-Example:
+- `https://your-domain.example`
+- `http://localhost` for local development
 
-```bash
-cat > .env <<'EOF'
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=change-this-now
-PUBLIC_BASE_URL=https://notes.example.com
-ROOT_REDIRECT_URL=/dashboard
-NOTES_PATH_PREFIX=notes
-DATABASE_URL=sqlite://data/tabnotes.db
-BIND_ADDR=0.0.0.0:8080
-PASSKEY_RP_NAME=TabNotes
-HIDE_FOOTER=false
-HIDE_SWAGGER=true
-HIDE_API_DOCS=false
-RUST_LOG=info
-EOF
+If the app runs behind a proxy or on an internal network, the browser still needs to access it through a valid secure origin.
+</details>
 
-docker compose up -d --build
-```
-
-If you specifically want a host bind mount like `./data:/app/data`, create the directory and make it writable by container UID `10001` first:
-
-```bash
-mkdir -p data
-sudo chown -R 10001:10001 data
-```
-
-If you want to publish a host port, add this to the service:
-
-```yaml
-ports:
-  - "8080:8080"
-```
-
-If you change or remove environment variables in Docker, recreate the container. A plain restart keeps the old container environment.
-
-```bash
-docker compose up -d --build --force-recreate
-```
-
-## docker run
-
-```bash
-docker build -t tabnotes .
-
-docker run -d \
-  --name tabnotes \
-  --restart unless-stopped \
-  -e ADMIN_USERNAME=admin \
-  -e ADMIN_PASSWORD='change-this-now' \
-  -e PUBLIC_BASE_URL='https://notes.example.com' \
-  -e ROOT_REDIRECT_URL='/dashboard' \
-  -e NOTES_PATH_PREFIX='notes' \
-  -e DATABASE_URL='sqlite://data/tabnotes.db' \
-  -e BIND_ADDR='0.0.0.0:8080' \
-  -e PASSKEY_RP_NAME='TabNotes' \
-  -e HIDE_FOOTER='false' \
-  -e HIDE_SWAGGER='true' \
-  -e HIDE_API_DOCS='false' \
-  -v tabnotes_data:/app/data \
-  tabnotes
-```
-
-If you need a host port:
-
-```bash
-docker run -d \
-  --name tabnotes \
-  -p 8080:8080 \
-  -e ADMIN_USERNAME=admin \
-  -e ADMIN_PASSWORD='change-this-now' \
-  -e PUBLIC_BASE_URL='http://localhost:8080' \
-  -e NOTES_PATH_PREFIX='notes' \
-  -v "$(pwd)/data:/app/data" \
-  tabnotes
-```
-
-If you use a host bind mount with `docker run`, fix permissions first:
-
-```bash
-mkdir -p data
-sudo chown -R 10001:10001 data
-```
-
-If you started the container with `docker run`, changing env vars later requires removing and creating the container again. `docker restart` does not replace its environment.
-
-## Install guide
-
-1. Clone or copy this project onto the machine that will run it.
-2. Set `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `PUBLIC_BASE_URL`, and `ROOT_REDIRECT_URL`.
-3. Start it with `docker compose up -d --build` or `cargo run`.
-4. Open `/login` and sign in with the configured admin credentials.
-5. Add a passkey from the dashboard if you want passwordless admin login.
-6. Create API keys from the dashboard if you want to manage notes over HTTP.
-7. Create notes and choose `admin`, `public`, or `code` visibility.
-
-## Routes
-
-- `/` redirects to `ROOT_REDIRECT_URL`
-- `/login` admin sign-in page
-- `/dashboard` admin dashboard
-- `/admin/notes/new` create note
-- `/admin/notes/:id/edit` edit note
-- `/admin/notes/:id/delete` delete note
-- `/admin/api-keys` create API key
-- `/admin/api-keys/:id/delete` delete API key
-- `/api/notes` list or create notes with an API key
-- `/api/notes/:id` read, update, or delete a note with an API key
-- `/api-docs/openapi.json` generated OpenAPI spec when API docs are enabled
-- `/swagger-ui` Swagger UI when explicitly enabled
-- `/<NOTES_PATH_PREFIX>/:slug` rendered shared note page
-
-## API usage
+<details>
+<summary><b><u><font size="+1">API Usage</font></u></b></summary>
 
 Create an API key from the dashboard. The raw key is shown only once, so store it immediately.
 
-Send the key in either of these headers:
+Send the key in either header:
 
 - `X-API-Key: tn_...`
 - `Authorization: Bearer tn_...`
-
-Example:
 
 ```bash
 API_KEY='tn_your_key_here'
@@ -219,7 +210,8 @@ curl -X POST http://localhost:8080/api/notes \
   -d '{
     "title": "API note",
     "slug": "api-note",
-    "content": "Created over HTTP",
+    "markdown": "# API note\n\nCreated over HTTP.",
     "visibility": "public"
   }'
 ```
+</details>

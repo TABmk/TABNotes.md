@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish TABNote"
+  short_description: "Publish Markdown notes to TABNote via curl"
+  default_prompt: "Use $publish-tabnote to publish this markdown as a TABNote note."
