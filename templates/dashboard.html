@@ -28,7 +28,10 @@
           <div class="note-row-main">
             <div class="note-title">{{ note.title }}</div>
             <div class="note-meta">
-              <span>{{ note.visibility_label }}</span>
+              <span class="visibility-icon" title="{{ note.visibility_label }}">
+                <span aria-hidden="true">{{ note.visibility_icon }}</span>
+                <span class="sr-only">{{ note.visibility_label }}</span>
+              </span>
               <span>{{ note.updated_at }}</span>
             </div>
           </div>

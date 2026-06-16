@@ -1,0 +1,62 @@
+name: Publish Docker Image
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_NAME: ${{ vars.DOCKERHUB_IMAGE }}
+    steps:
+      - name: Validate Docker Hub configuration
+        run: |
+          test -n "${IMAGE_NAME}" || { echo "Missing repository variable DOCKERHUB_IMAGE"; exit 1; }
+          test -n "${{ secrets.DOCKERHUB_USERNAME }}" || { echo "Missing secret DOCKERHUB_USERNAME"; exit 1; }
+          test -n "${{ secrets.DOCKERHUB_TOKEN }}" || { echo "Missing secret DOCKERHUB_TOKEN"; exit 1; }
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

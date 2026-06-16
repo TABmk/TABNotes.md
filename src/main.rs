@@ -166,6 +166,14 @@ impl NoteVisibility {
         }
     }
 
+    fn icon(self) -> &'static str {
+        match self {
+            Self::Admin => "🔒",
+            Self::Public => "🌐",
+            Self::Code => "🔑",
+        }
+    }
+
     fn label(self) -> &'static str {
         match self {
             Self::Admin => "Admin only",
@@ -230,6 +238,7 @@ struct DashboardNote {
     id: i64,
     title: String,
     slug: String,
+    visibility_icon: String,
     visibility_label: String,
     updated_at: String,
 }
@@ -676,15 +685,20 @@ async fn dashboard(State(state): State<Arc<AppState>>, session: Session) -> AppR
     .fetch_all(&state.pool)
     .await?
     .into_iter()
-    .map(|note| DashboardNote {
-        id: note.id,
-        title: note.title.clone(),
-        slug: note.slug.clone(),
-        visibility_label: note
+    .map(|note| {
+        let (visibility_icon, visibility_label) = note
             .visibility_enum()
-            .map(|v| v.label().to_string())
-            .unwrap_or_else(|_| "Unknown".into()),
-        updated_at: note.updated_at,
+            .map(|visibility| (visibility.icon().to_string(), visibility.label().to_string()))
+            .unwrap_or_else(|_| ("❓".into(), "Unknown".into()));
+
+        DashboardNote {
+            id: note.id,
+            title: note.title.clone(),
+            slug: note.slug.clone(),
+            visibility_icon,
+            visibility_label,
+            updated_at: note.updated_at,
+        }
     })
     .collect();
 
@@ -1921,6 +1935,16 @@ mod tests {
     #[tokio::test]
     async fn dashboard_renders_api_keys_section() {
         let state = test_state().await;
+        sqlx::query(
+            "INSERT INTO notes (title, slug, visibility, markdown, updated_at) VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)",
+        )
+        .bind("Visible note")
+        .bind("visible-note")
+        .bind("public")
+        .bind("Hello")
+        .execute(&state.pool)
+        .await
+        .unwrap();
         let app = test_app(state);
         let cookie = admin_cookie(&app).await;
 
@@ -1939,6 +1963,8 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_text(response).await;
         assert!(body.contains("API keys"));
+        assert!(body.contains("🌐"));
+        assert!(body.contains("Public"));
         assert!(!body.contains("Use this for authenticated requests to the notes CRUD API."));
     }
 

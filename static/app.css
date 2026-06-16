@@ -580,10 +580,18 @@ button,
 .note-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   margin-top: 3px;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.visibility-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
 }
 
 .api-key-row {
